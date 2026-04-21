@@ -1,0 +1,1032 @@
+import { useState, useRef, useEffect } from "react";
+
+const PHYSICS_SCENARIOS = [
+  {
+    id: "newton3",
+    topic: "Newton's Third Law",
+    title: "The Truck vs. The Car",
+    scenario:
+      "A 10,000 kg truck traveling at 60 km/h collides head-on with a 1,000 kg compact car traveling at 60 km/h in the opposite direction.",
+    provocation:
+      "Which vehicle exerts a greater force on the other during the collision?",
+    options: [
+      "The truck exerts more force on the car",
+      "The car exerts more force on the truck",
+      "They exert equal forces on each other",
+      "It depends on which one is moving faster",
+    ],
+    commonMisconception: 0,
+    correctAnswer: 2,
+    conceptTag: "Newton's Third Law — Action-Reaction Pairs",
+  },
+  {
+    id: "freefall",
+    topic: "Free Fall & Gravity",
+    title: "The Bowling Ball vs. The Tennis Ball",
+    scenario:
+      "You are standing on a 5th-floor balcony holding a 7 kg bowling ball in one hand and a 0.06 kg tennis ball in the other. You release both at exactly the same time.",
+    provocation:
+      "Ignoring air resistance, which ball hits the ground first?",
+    options: [
+      "The bowling ball hits first because it's heavier",
+      "The tennis ball hits first because it's lighter",
+      "They hit at exactly the same time",
+      "It depends on the height of the building",
+    ],
+    commonMisconception: 0,
+    correctAnswer: 2,
+    conceptTag: "Galileo's Principle — Independence of Mass in Free Fall",
+  },
+  {
+    id: "elevator",
+    topic: "Apparent Weight & Normal Force",
+    title: "The Elevator Mystery",
+    scenario:
+      "You are standing on a bathroom scale inside an elevator. The scale reads your normal weight of 600 N while the elevator is stationary. The elevator then begins to accelerate upward.",
+    provocation: "What happens to the reading on the scale as the elevator accelerates upward?",
+    options: [
+      "The reading stays at 600 N — your weight doesn't change",
+      "The reading increases above 600 N",
+      "The reading decreases below 600 N",
+      "The scale can't measure weight in a moving elevator",
+    ],
+    commonMisconception: 0,
+    correctAnswer: 1,
+    conceptTag: "Apparent Weight — Net Force in Non-Inertial Frames",
+  },
+];
+
+const PHASES = {
+  WELCOME: "welcome",
+  SCENARIO: "scenario",
+  PREDICT: "predict",
+  DIALOGUE: "dialogue",
+  RESOLUTION: "resolution",
+};
+
+const systemPrompt = (scenario) => `You are a Socratic physics tutor embedded in an AI-facilitated learning module. Your role is to guide a student through conceptual understanding using cognitive conflict — NOT to lecture or give answers directly.
+
+CONTEXT:
+- Topic: ${scenario.topic}
+- Scenario: ${scenario.scenario}
+- Question: ${scenario.provocation}
+- The correct answer is option index ${scenario.correctAnswer}: "${scenario.options[scenario.correctAnswer]}"
+- Common misconception: option index ${scenario.commonMisconception}: "${scenario.options[scenario.commonMisconception]}"
+
+YOUR PEDAGOGICAL APPROACH:
+1. NEVER directly tell the student the correct answer
+2. If they chose correctly, probe WHY — don't just confirm. Ask them to justify with physics principles
+3. If they chose incorrectly, don't say "wrong." Instead:
+   - Acknowledge their reasoning ("That's a common intuition...")
+   - Present a thought experiment or counterexample that creates doubt
+   - Ask a follow-up question that forces them to confront the contradiction
+4. Use the Socratic method: ask questions that lead them to discover the answer themselves
+5. If they seem stuck after 3-4 exchanges, provide a carefully graduated hint — not the answer
+6. Track their reasoning quality: Are they using physics principles or just guessing?
+
+RESPONSE STYLE:
+- Keep responses SHORT (2-4 sentences max) — this is a dialogue, not a lecture
+- Be warm but intellectually rigorous
+- Use everyday analogies when helpful
+- Ask ONE focused question at a time
+- Write in a conversational tone appropriate for college students
+
+ANTI-CHEATING AWARENESS:
+- If a student's response suddenly shifts from informal reasoning to textbook-perfect language, gently ask them to explain the concept "in their own words as if explaining to a friend"
+- If they paste a definition, say something like "That sounds like a textbook. Can you tell me what that actually means to you?"
+
+IMPORTANT: You are helping a Filipino college student (BSEd Science) learn physics during an alternative delivery mode. Be culturally sensitive and encouraging while maintaining rigor.
+
+Respond ONLY with valid JSON: {"reply": "your message", "reasoning_quality": "shallow|developing|deep", "phase_hint": "continue|approaching_resolution|resolved"}`;
+
+export default function SocraticPhysicsModule() {
+  const [phase, setPhase] = useState(PHASES.WELCOME);
+  const [selectedScenario, setSelectedScenario] = useState(null);
+  const [prediction, setPrediction] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [reasoningLevel, setReasoningLevel] = useState("shallow");
+  const [turnCount, setTurnCount] = useState(0);
+  const [journeyLog, setJourneyLog] = useState([]);
+  const chatEndRef = useRef(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  useEffect(() => {
+    if (phase === PHASES.DIALOGUE) {
+      inputRef.current?.focus();
+    }
+  }, [phase, loading]);
+
+  const selectScenario = (scenario) => {
+    setSelectedScenario(scenario);
+    setPhase(PHASES.SCENARIO);
+  };
+
+  const makePrediction = async (optionIndex) => {
+    setPrediction(optionIndex);
+    setPhase(PHASES.DIALOGUE);
+    setJourneyLog([
+      {
+        type: "prediction",
+        value: selectedScenario.options[optionIndex],
+        correct: optionIndex === selectedScenario.correctAnswer,
+      },
+    ]);
+
+    const initialMessage = {
+      role: "user",
+      content: `I chose: "${selectedScenario.options[optionIndex]}"`,
+    };
+
+    setMessages([
+      {
+        role: "assistant",
+        content:
+          optionIndex === selectedScenario.correctAnswer
+            ? `Interesting choice! But I'm curious — WHY do you think that's the case? Walk me through your reasoning. What physics principle supports your answer?`
+            : `That's a very common answer — most people would agree with you intuitively. Before I respond, tell me: what's your reasoning? Why did you choose that?`,
+      },
+    ]);
+  };
+
+  const sendMessage = async () => {
+    if (!input.trim() || loading) return;
+    const userMsg = input.trim();
+    setInput("");
+    const newMessages = [...messages, { role: "user", content: userMsg }];
+    setMessages(newMessages);
+    setLoading(true);
+    setTurnCount((t) => t + 1);
+
+    try {
+      const apiMessages = [
+        {
+          role: "user",
+          content: `Student initially predicted: "${selectedScenario.options[prediction]}" (${prediction === selectedScenario.correctAnswer ? "correct" : "incorrect"})`,
+        },
+        ...newMessages,
+      ];
+
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          system: systemPrompt(selectedScenario),
+          messages: apiMessages,
+        }),
+      });
+
+      const data = await response.json();
+      const raw = data.content
+        ?.map((c) => c.text || "")
+        .filter(Boolean)
+        .join("");
+
+      let reply = raw;
+      let quality = reasoningLevel;
+      let phaseHint = "continue";
+
+      try {
+        const cleaned = raw.replace(/```json|```/g, "").trim();
+        const parsed = JSON.parse(cleaned);
+        reply = parsed.reply || raw;
+        quality = parsed.reasoning_quality || quality;
+        phaseHint = parsed.phase_hint || "continue";
+      } catch {
+        // Use raw text if JSON parsing fails
+      }
+
+      setReasoningLevel(quality);
+      setMessages([...newMessages, { role: "assistant", content: reply }]);
+      setJourneyLog((prev) => [
+        ...prev,
+        { type: "exchange", student: userMsg, quality, turn: turnCount + 1 },
+      ]);
+
+      if (phaseHint === "resolved" && turnCount >= 3) {
+        setTimeout(() => setPhase(PHASES.RESOLUTION), 2000);
+      }
+    } catch (err) {
+      setMessages([
+        ...newMessages,
+        {
+          role: "assistant",
+          content:
+            "I'm having trouble connecting right now. Try sending your response again.",
+        },
+      ]);
+    }
+
+    setLoading(false);
+  };
+
+  const resetModule = () => {
+    setPhase(PHASES.WELCOME);
+    setSelectedScenario(null);
+    setPrediction(null);
+    setMessages([]);
+    setInput("");
+    setReasoningLevel("shallow");
+    setTurnCount(0);
+    setJourneyLog([]);
+  };
+
+  const qualityColor =
+    reasoningLevel === "deep"
+      ? "#2a9d8f"
+      : reasoningLevel === "developing"
+        ? "#e9c46a"
+        : "#e76f51";
+  const qualityLabel =
+    reasoningLevel === "deep"
+      ? "Deep Reasoning"
+      : reasoningLevel === "developing"
+        ? "Developing"
+        : "Surface Level";
+
+  return (
+    <div style={styles.container}>
+      {/* Header */}
+      <header style={styles.header}>
+        <div style={styles.headerInner}>
+          <div style={styles.logoMark}>Σ</div>
+          <div>
+            <h1 style={styles.title}>Socratic Physics Module</h1>
+            <p style={styles.subtitle}>
+              AI-Facilitated Cognitive Activation
+            </p>
+          </div>
+        </div>
+        {phase !== PHASES.WELCOME && (
+          <button onClick={resetModule} style={styles.resetBtn}>
+            ← Back
+          </button>
+        )}
+      </header>
+
+      {/* WELCOME */}
+      {phase === PHASES.WELCOME && (
+        <div style={styles.content}>
+          <div style={styles.welcomeCard}>
+            <h2 style={styles.welcomeTitle}>How This Works</h2>
+            <p style={styles.welcomeText}>
+              This isn't a regular module. You won't just read and answer — you'll <strong>think, predict, and defend your reasoning</strong> in a dialogue with an AI tutor.
+            </p>
+            <div style={styles.stepList}>
+              {[
+                ["🎯", "Read a physics scenario and make a prediction"],
+                ["💬", "Explain your reasoning in a Socratic dialogue"],
+                ["🧠", "Confront contradictions and refine your understanding"],
+                ["✅", "Arrive at understanding through your own thinking"],
+              ].map(([icon, text], i) => (
+                <div key={i} style={styles.stepItem}>
+                  <span style={styles.stepIcon}>{icon}</span>
+                  <span style={styles.stepText}>{text}</span>
+                </div>
+              ))}
+            </div>
+            <p style={styles.noteText}>
+              <strong>Note:</strong> Copying answers won't help here — the AI adapts to YOUR reasoning. There's no answer key to find.
+            </p>
+          </div>
+
+          <h3 style={styles.sectionTitle}>Choose a Scenario</h3>
+          <div style={styles.scenarioGrid}>
+            {PHYSICS_SCENARIOS.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => selectScenario(s)}
+                style={styles.scenarioCard}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = "translateY(-2px)";
+                  e.currentTarget.style.boxShadow = "0 8px 24px rgba(0,0,0,0.12)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = "translateY(0)";
+                  e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.06)";
+                }}
+              >
+                <span style={styles.scenarioTopic}>{s.topic}</span>
+                <span style={styles.scenarioTitle}>{s.title}</span>
+                <span style={styles.scenarioTag}>{s.conceptTag}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* SCENARIO PRESENTATION */}
+      {phase === PHASES.SCENARIO && selectedScenario && (
+        <div style={styles.content}>
+          <div style={styles.scenarioPresentation}>
+            <span style={styles.scenarioLabel}>{selectedScenario.topic}</span>
+            <h2 style={styles.scenarioPresentTitle}>
+              {selectedScenario.title}
+            </h2>
+            <div style={styles.scenarioBox}>
+              <p style={styles.scenarioText}>{selectedScenario.scenario}</p>
+            </div>
+            <div style={styles.provocationBox}>
+              <p style={styles.provocationText}>
+                {selectedScenario.provocation}
+              </p>
+            </div>
+            <p style={styles.instructionText}>
+              Think carefully before choosing. Your reasoning matters more than your answer.
+            </p>
+            <button
+              onClick={() => setPhase(PHASES.PREDICT)}
+              style={styles.primaryBtn}
+            >
+              I've thought about it — show me the choices
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* PREDICTION */}
+      {phase === PHASES.PREDICT && selectedScenario && (
+        <div style={styles.content}>
+          <div style={styles.predictSection}>
+            <h3 style={styles.predictTitle}>What's your prediction?</h3>
+            <p style={styles.predictSubtitle}>
+              {selectedScenario.provocation}
+            </p>
+            <div style={styles.optionsContainer}>
+              {selectedScenario.options.map((opt, i) => (
+                <button
+                  key={i}
+                  onClick={() => makePrediction(i)}
+                  style={styles.optionBtn}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = "#1d3557";
+                    e.currentTarget.style.background = "#f0f4f8";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = "#d0d7de";
+                    e.currentTarget.style.background = "#fff";
+                  }}
+                >
+                  <span style={styles.optionLetter}>
+                    {String.fromCharCode(65 + i)}
+                  </span>
+                  <span style={styles.optionText}>{opt}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DIALOGUE */}
+      {phase === PHASES.DIALOGUE && (
+        <div style={styles.dialogueContainer}>
+          {/* Reasoning Indicator */}
+          <div style={styles.reasoningBar}>
+            <div style={styles.reasoningInfo}>
+              <span style={styles.reasoningLabel}>Reasoning depth:</span>
+              <span
+                style={{
+                  ...styles.reasoningBadge,
+                  background: qualityColor + "22",
+                  color: qualityColor,
+                  borderColor: qualityColor,
+                }}
+              >
+                {qualityLabel}
+              </span>
+            </div>
+            <span style={styles.turnCounter}>Turn {turnCount}/8</span>
+          </div>
+
+          {/* Scenario reminder */}
+          <div style={styles.scenarioReminder}>
+            <strong>{selectedScenario.title}:</strong>{" "}
+            {selectedScenario.provocation}
+            <br />
+            <span style={{ color: "#6b7280" }}>
+              Your prediction:{" "}
+              {selectedScenario.options[prediction]}
+            </span>
+          </div>
+
+          {/* Chat area */}
+          <div style={styles.chatArea}>
+            {messages.map((msg, i) => (
+              <div
+                key={i}
+                style={{
+                  ...styles.messageBubble,
+                  ...(msg.role === "user"
+                    ? styles.userBubble
+                    : styles.aiBubble),
+                }}
+              >
+                {msg.role === "assistant" && (
+                  <span style={styles.aiLabel}>Socratic Tutor</span>
+                )}
+                <p style={styles.messageText}>{msg.content}</p>
+              </div>
+            ))}
+            {loading && (
+              <div style={{ ...styles.messageBubble, ...styles.aiBubble }}>
+                <span style={styles.aiLabel}>Socratic Tutor</span>
+                <p style={styles.messageText}>
+                  <span style={styles.typing}>Thinking...</span>
+                </p>
+              </div>
+            )}
+            <div ref={chatEndRef} />
+          </div>
+
+          {/* Input */}
+          <div style={styles.inputArea}>
+            <div style={styles.inputWrapper}>
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                  }
+                }}
+                placeholder="Explain your reasoning here..."
+                style={styles.textInput}
+                rows={2}
+              />
+              <button
+                onClick={sendMessage}
+                disabled={loading || !input.trim()}
+                style={{
+                  ...styles.sendBtn,
+                  opacity: loading || !input.trim() ? 0.4 : 1,
+                }}
+              >
+                Send
+              </button>
+            </div>
+            <p style={styles.inputHint}>
+              Use your own words. The AI will follow up based on YOUR reasoning.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* RESOLUTION */}
+      {phase === PHASES.RESOLUTION && (
+        <div style={styles.content}>
+          <div style={styles.resolutionCard}>
+            <h2 style={styles.resolutionTitle}>Your Learning Journey</h2>
+            <div style={styles.journeySummary}>
+              <div style={styles.summaryItem}>
+                <span style={styles.summaryLabel}>Topic</span>
+                <span style={styles.summaryValue}>
+                  {selectedScenario.topic}
+                </span>
+              </div>
+              <div style={styles.summaryItem}>
+                <span style={styles.summaryLabel}>Initial Prediction</span>
+                <span
+                  style={{
+                    ...styles.summaryValue,
+                    color:
+                      prediction === selectedScenario.correctAnswer
+                        ? "#2a9d8f"
+                        : "#e76f51",
+                  }}
+                >
+                  {prediction === selectedScenario.correctAnswer
+                    ? "✓ Correct"
+                    : "✗ Misconception identified"}
+                </span>
+              </div>
+              <div style={styles.summaryItem}>
+                <span style={styles.summaryLabel}>Dialogue Turns</span>
+                <span style={styles.summaryValue}>{turnCount}</span>
+              </div>
+              <div style={styles.summaryItem}>
+                <span style={styles.summaryLabel}>Final Reasoning Level</span>
+                <span
+                  style={{
+                    ...styles.summaryValue,
+                    color: qualityColor,
+                    fontWeight: 700,
+                  }}
+                >
+                  {qualityLabel}
+                </span>
+              </div>
+            </div>
+
+            <div style={styles.reflectionBox}>
+              <h3 style={styles.reflectionTitle}>
+                Before you finish — reflect:
+              </h3>
+              <p style={styles.reflectionQ}>
+                1. What was your initial belief, and what changed it?
+              </p>
+              <p style={styles.reflectionQ}>
+                2. Can you now explain the correct answer to a classmate WITHOUT looking at the conversation above?
+              </p>
+              <p style={styles.reflectionQ}>
+                3. What real-world example of this physics concept can you think of?
+              </p>
+            </div>
+
+            <button onClick={resetModule} style={styles.primaryBtn}>
+              Try another scenario
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Footer */}
+      <footer style={styles.footer}>
+        <p>
+          Prototype: AI-Facilitated Socratic Module for Physics — ADM Context
+        </p>
+      </footer>
+    </div>
+  );
+}
+
+const styles = {
+  container: {
+    fontFamily: "'Source Serif 4', 'Georgia', serif",
+    background: "#fafaf8",
+    minHeight: "100vh",
+    display: "flex",
+    flexDirection: "column",
+    color: "#1a1a1a",
+  },
+  header: {
+    background: "#1d3557",
+    color: "#fff",
+    padding: "16px 20px",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    position: "sticky",
+    top: 0,
+    zIndex: 10,
+  },
+  headerInner: {
+    display: "flex",
+    alignItems: "center",
+    gap: "12px",
+  },
+  logoMark: {
+    width: 40,
+    height: 40,
+    borderRadius: "50%",
+    background: "#e9c46a",
+    color: "#1d3557",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: "22px",
+    fontWeight: 800,
+  },
+  title: {
+    margin: 0,
+    fontSize: "17px",
+    fontWeight: 700,
+    letterSpacing: "-0.3px",
+  },
+  subtitle: {
+    margin: 0,
+    fontSize: "11px",
+    opacity: 0.7,
+    letterSpacing: "1px",
+    textTransform: "uppercase",
+    fontFamily: "'Helvetica Neue', sans-serif",
+  },
+  resetBtn: {
+    background: "transparent",
+    border: "1px solid rgba(255,255,255,0.3)",
+    color: "#fff",
+    padding: "6px 14px",
+    borderRadius: "6px",
+    cursor: "pointer",
+    fontSize: "13px",
+    fontFamily: "'Helvetica Neue', sans-serif",
+  },
+  content: {
+    flex: 1,
+    maxWidth: 680,
+    width: "100%",
+    margin: "0 auto",
+    padding: "24px 16px",
+  },
+  welcomeCard: {
+    background: "#fff",
+    border: "1px solid #e5e5e0",
+    borderRadius: "12px",
+    padding: "24px",
+    marginBottom: "28px",
+  },
+  welcomeTitle: {
+    margin: "0 0 12px",
+    fontSize: "20px",
+    fontWeight: 700,
+    color: "#1d3557",
+  },
+  welcomeText: {
+    margin: "0 0 20px",
+    fontSize: "15px",
+    lineHeight: 1.7,
+    color: "#444",
+  },
+  stepList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "10px",
+    marginBottom: "20px",
+  },
+  stepItem: {
+    display: "flex",
+    alignItems: "center",
+    gap: "12px",
+    padding: "10px 14px",
+    background: "#f8f7f4",
+    borderRadius: "8px",
+  },
+  stepIcon: { fontSize: "20px" },
+  stepText: {
+    fontSize: "14px",
+    color: "#333",
+    fontFamily: "'Helvetica Neue', sans-serif",
+  },
+  noteText: {
+    fontSize: "13px",
+    color: "#666",
+    background: "#fef9e7",
+    padding: "12px 16px",
+    borderRadius: "8px",
+    borderLeft: "3px solid #e9c46a",
+    lineHeight: 1.6,
+  },
+  sectionTitle: {
+    fontSize: "16px",
+    fontWeight: 700,
+    color: "#1d3557",
+    marginBottom: "14px",
+    textTransform: "uppercase",
+    letterSpacing: "1px",
+    fontFamily: "'Helvetica Neue', sans-serif",
+    fontSize: "12px",
+  },
+  scenarioGrid: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "10px",
+  },
+  scenarioCard: {
+    background: "#fff",
+    border: "1px solid #d0d7de",
+    borderRadius: "10px",
+    padding: "18px 20px",
+    cursor: "pointer",
+    textAlign: "left",
+    display: "flex",
+    flexDirection: "column",
+    gap: "6px",
+    transition: "all 0.2s ease",
+    boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+  },
+  scenarioTopic: {
+    fontSize: "11px",
+    textTransform: "uppercase",
+    letterSpacing: "1.2px",
+    color: "#e76f51",
+    fontWeight: 700,
+    fontFamily: "'Helvetica Neue', sans-serif",
+  },
+  scenarioTitle: {
+    fontSize: "17px",
+    fontWeight: 700,
+    color: "#1d3557",
+  },
+  scenarioTag: {
+    fontSize: "12px",
+    color: "#888",
+    fontFamily: "'Helvetica Neue', sans-serif",
+  },
+  scenarioPresentation: {
+    textAlign: "center",
+    paddingTop: "20px",
+  },
+  scenarioLabel: {
+    fontSize: "11px",
+    textTransform: "uppercase",
+    letterSpacing: "1.5px",
+    color: "#e76f51",
+    fontWeight: 700,
+    fontFamily: "'Helvetica Neue', sans-serif",
+  },
+  scenarioPresentTitle: {
+    fontSize: "26px",
+    fontWeight: 700,
+    color: "#1d3557",
+    margin: "8px 0 24px",
+  },
+  scenarioBox: {
+    background: "#fff",
+    border: "1px solid #e5e5e0",
+    borderRadius: "12px",
+    padding: "24px",
+    marginBottom: "20px",
+    textAlign: "left",
+  },
+  scenarioText: {
+    fontSize: "16px",
+    lineHeight: 1.8,
+    color: "#333",
+    margin: 0,
+  },
+  provocationBox: {
+    background: "#1d3557",
+    color: "#fff",
+    borderRadius: "12px",
+    padding: "20px 24px",
+    marginBottom: "20px",
+  },
+  provocationText: {
+    fontSize: "18px",
+    fontWeight: 600,
+    margin: 0,
+    lineHeight: 1.5,
+  },
+  instructionText: {
+    fontSize: "14px",
+    color: "#888",
+    marginBottom: "20px",
+    fontFamily: "'Helvetica Neue', sans-serif",
+  },
+  primaryBtn: {
+    background: "#1d3557",
+    color: "#fff",
+    border: "none",
+    padding: "14px 28px",
+    borderRadius: "8px",
+    fontSize: "15px",
+    fontWeight: 600,
+    cursor: "pointer",
+    fontFamily: "'Source Serif 4', Georgia, serif",
+  },
+  predictSection: { paddingTop: "10px" },
+  predictTitle: {
+    fontSize: "20px",
+    fontWeight: 700,
+    color: "#1d3557",
+    margin: "0 0 8px",
+  },
+  predictSubtitle: {
+    fontSize: "15px",
+    color: "#555",
+    marginBottom: "20px",
+    lineHeight: 1.6,
+  },
+  optionsContainer: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "10px",
+  },
+  optionBtn: {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: "14px",
+    padding: "16px 18px",
+    background: "#fff",
+    border: "2px solid #d0d7de",
+    borderRadius: "10px",
+    cursor: "pointer",
+    textAlign: "left",
+    transition: "all 0.15s ease",
+    fontSize: "15px",
+  },
+  optionLetter: {
+    width: 30,
+    height: 30,
+    borderRadius: "50%",
+    background: "#1d3557",
+    color: "#fff",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: "13px",
+    fontWeight: 700,
+    flexShrink: 0,
+    fontFamily: "'Helvetica Neue', sans-serif",
+  },
+  optionText: {
+    paddingTop: "4px",
+    lineHeight: 1.5,
+    color: "#333",
+  },
+  dialogueContainer: {
+    flex: 1,
+    display: "flex",
+    flexDirection: "column",
+    maxWidth: 680,
+    width: "100%",
+    margin: "0 auto",
+  },
+  reasoningBar: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: "10px 16px",
+    background: "#fff",
+    borderBottom: "1px solid #eee",
+  },
+  reasoningInfo: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+  },
+  reasoningLabel: {
+    fontSize: "12px",
+    color: "#888",
+    fontFamily: "'Helvetica Neue', sans-serif",
+  },
+  reasoningBadge: {
+    fontSize: "11px",
+    fontWeight: 700,
+    padding: "3px 10px",
+    borderRadius: "20px",
+    border: "1px solid",
+    fontFamily: "'Helvetica Neue', sans-serif",
+  },
+  turnCounter: {
+    fontSize: "12px",
+    color: "#aaa",
+    fontFamily: "'Helvetica Neue', sans-serif",
+  },
+  scenarioReminder: {
+    fontSize: "13px",
+    padding: "12px 16px",
+    background: "#f8f7f4",
+    borderBottom: "1px solid #eee",
+    lineHeight: 1.5,
+  },
+  chatArea: {
+    flex: 1,
+    overflowY: "auto",
+    padding: "16px",
+    display: "flex",
+    flexDirection: "column",
+    gap: "12px",
+    minHeight: 280,
+  },
+  messageBubble: {
+    maxWidth: "85%",
+    padding: "12px 16px",
+    borderRadius: "12px",
+    lineHeight: 1.6,
+  },
+  userBubble: {
+    alignSelf: "flex-end",
+    background: "#1d3557",
+    color: "#fff",
+    borderBottomRightRadius: "4px",
+  },
+  aiBubble: {
+    alignSelf: "flex-start",
+    background: "#fff",
+    border: "1px solid #e5e5e0",
+    borderBottomLeftRadius: "4px",
+  },
+  aiLabel: {
+    fontSize: "10px",
+    textTransform: "uppercase",
+    letterSpacing: "1px",
+    color: "#e76f51",
+    fontWeight: 700,
+    fontFamily: "'Helvetica Neue', sans-serif",
+    display: "block",
+    marginBottom: "4px",
+  },
+  messageText: {
+    margin: 0,
+    fontSize: "15px",
+  },
+  typing: {
+    color: "#aaa",
+    fontStyle: "italic",
+  },
+  inputArea: {
+    padding: "12px 16px",
+    borderTop: "1px solid #eee",
+    background: "#fff",
+  },
+  inputWrapper: {
+    display: "flex",
+    gap: "8px",
+    alignItems: "flex-end",
+  },
+  textInput: {
+    flex: 1,
+    padding: "12px 14px",
+    border: "2px solid #d0d7de",
+    borderRadius: "10px",
+    fontSize: "15px",
+    fontFamily: "'Source Serif 4', Georgia, serif",
+    resize: "none",
+    outline: "none",
+    lineHeight: 1.5,
+  },
+  sendBtn: {
+    background: "#1d3557",
+    color: "#fff",
+    border: "none",
+    padding: "12px 20px",
+    borderRadius: "10px",
+    fontSize: "14px",
+    fontWeight: 600,
+    cursor: "pointer",
+    fontFamily: "'Helvetica Neue', sans-serif",
+    whiteSpace: "nowrap",
+  },
+  inputHint: {
+    fontSize: "11px",
+    color: "#aaa",
+    margin: "6px 0 0",
+    fontFamily: "'Helvetica Neue', sans-serif",
+  },
+  resolutionCard: {
+    background: "#fff",
+    border: "1px solid #e5e5e0",
+    borderRadius: "12px",
+    padding: "28px 24px",
+    textAlign: "center",
+  },
+  resolutionTitle: {
+    fontSize: "22px",
+    fontWeight: 700,
+    color: "#1d3557",
+    margin: "0 0 24px",
+  },
+  journeySummary: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: "12px",
+    marginBottom: "24px",
+  },
+  summaryItem: {
+    background: "#f8f7f4",
+    borderRadius: "8px",
+    padding: "14px",
+    display: "flex",
+    flexDirection: "column",
+    gap: "4px",
+  },
+  summaryLabel: {
+    fontSize: "11px",
+    textTransform: "uppercase",
+    letterSpacing: "0.8px",
+    color: "#888",
+    fontFamily: "'Helvetica Neue', sans-serif",
+  },
+  summaryValue: {
+    fontSize: "15px",
+    fontWeight: 600,
+    color: "#1d3557",
+  },
+  reflectionBox: {
+    textAlign: "left",
+    background: "#fef9e7",
+    borderRadius: "10px",
+    padding: "20px",
+    marginBottom: "24px",
+    borderLeft: "3px solid #e9c46a",
+  },
+  reflectionTitle: {
+    margin: "0 0 12px",
+    fontSize: "16px",
+    color: "#1d3557",
+  },
+  reflectionQ: {
+    fontSize: "14px",
+    color: "#555",
+    margin: "0 0 8px",
+    lineHeight: 1.6,
+  },
+  footer: {
+    textAlign: "center",
+    padding: "16px",
+    fontSize: "11px",
+    color: "#bbb",
+    fontFamily: "'Helvetica Neue', sans-serif",
+    borderTop: "1px solid #eee",
+  },
+};
